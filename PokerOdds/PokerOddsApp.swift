@@ -364,8 +364,26 @@ struct ContentView: View {
 
                     if let result = vm.result {
                         VStack(alignment: .leading, spacing: 6) {
-                            Text("六位玩家胜率（平局均分权益）")
-                                .font(.subheadline.weight(.bold))
+                            HStack {
+                                Text("六位玩家胜率与公平赔率")
+                                    .font(.subheadline.weight(.bold))
+                                Spacer()
+                                Text("赔率")
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundColor(.blue)
+                            }
+
+                            HStack {
+                                Text("玩家")
+                                    .frame(width: 24, alignment: .leading)
+                                Spacer()
+                                Text("权益胜率")
+                                    .frame(width: 58, alignment: .trailing)
+                                Text("公平赔率")
+                                    .frame(width: 42, alignment: .trailing)
+                            }
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundColor(.secondary)
 
                             ForEach(0..<6, id: \.self) { player in
                                 VStack(alignment: .leading, spacing: 2) {
@@ -384,9 +402,14 @@ struct ContentView: View {
                                         }
                                         .frame(height: 8)
 
-                                        Text(String(format: "%.2f%%", result.shares[player] / Double(max(1, result.scenarios)) * 100))
+                                        let equity = result.shares[player] / Double(max(1, result.scenarios))
+                                        Text(String(format: "%.2f%%", equity * 100))
                                             .font(.caption.monospacedDigit().weight(.semibold))
                                             .frame(width: 58, alignment: .trailing)
+                                        Text(equity > 0 ? String(format: "%.2f", 1.0 / equity) : "—")
+                                            .font(.caption.monospacedDigit().weight(.semibold))
+                                            .foregroundColor(.blue)
+                                            .frame(width: 42, alignment: .trailing)
                                     }
 
                                     HStack(spacing: 12) {
@@ -399,7 +422,7 @@ struct ContentView: View {
                                 }
                             }
 
-                            Text("胜率按权益计算：单独获胜计 100%，多人平局时由获胜玩家均分。")
+                            Text("权益 = 单独获胜概率 + 平局时可分得的底池份额；公平十进制赔率 = 1 ÷ 权益（不含抽水）。例如权益 40% 对应 2.50。")
                                 .font(.caption2)
                                 .foregroundColor(.secondary)
                         }
