@@ -433,13 +433,13 @@ struct CardPickerView: View {
             }
             .navigationTitle("选择一张牌")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
+            .toolbar(content: {
                 if current != nil {
                     ToolbarItem(placement: .navigationBarTrailing) {
                         Button("清除", role: .destructive) { onSelect(nil) }
                     }
                 }
-            }
+            } as ToolbarContent)
         }
     }
 }
