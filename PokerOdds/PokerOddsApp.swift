@@ -122,116 +122,130 @@ final class HandEvaluator {
     }
 }
 
-// MARK: - 胜率计算（精确枚举）
+// MARK: - 六人德州扑克胜率（已知全部底牌，枚举剩余公共牌）
 
-struct EquityResult {
+struct PlayerResult: Identifiable {
+    let id: Int
     let win: Int
     let tie: Int
-    let lose: Int
-    var total: Int { win + tie + lose }
-    var winPct: Double { Double(win) / Double(total) }
-    var tiePct: Double { Double(tie) / Double(total) }
-    var losePct: Double { Double(lose) / Double(total) }
-    /// 平局按一半计入的权益
-    var equity: Double { (Double(win) + Double(tie) / 2) / Double(total) }
+    let equity: Double
+    var winPct: Double { Double(win) / Double(max(1, win + tie + (0))) }
+}
+
+struct EquityResult {
+    let wins: [Int]
+    let ties: [Int]
+    let shares: [Double]
+    let scenarios: Int
 }
 
 enum EquityCalculator {
-    /// 玩家2最佳牌型低于一对4时，按特殊规则直接判玩家1获胜。
-    /// 分数编码与 HandEvaluator 一致：类别1（对子），对子点数2（4）。
-    private static let minimumOpponentScore = (1 << 20) | (2 << 16)
-
-    /// hero: 玩家1两张明牌；board: 三张已知公共牌。
-    /// 枚举玩家2两张暗牌及转牌、河牌，共 C(47,2) × C(45,2) = 1,070,190 种。
-    static func compute(hero: [Int], board: [Int]) -> EquityResult {
-        let used = Set(hero + board)
+    static func compute(holeCards: [[Int]], board: [Int]) -> EquityResult {
+        let used = Set(holeCards.flatMap { $0 } + board)
         let deck = (0..<52).filter { !used.contains($0) }
-        let n = deck.count // 47
+        let missing = 5 - board.count
+        let evaluator = HandEvaluator()
+        let hands = (0..<6).map { _ in UnsafeMutablePointer<Int>.allocate(capacity: 7) }
+        defer { hands.forEach { $0.deallocate() } }
 
-        let ev = HandEvaluator()
-        let h = UnsafeMutablePointer<Int>.allocate(capacity: 7)
-        let o = UnsafeMutablePointer<Int>.allocate(capacity: 7)
-        defer { h.deallocate(); o.deallocate() }
+        for p in 0..<6 {
+            hands[p][0] = holeCards[p][0]
+            hands[p][1] = holeCards[p][1]
+            for i in 0..<board.count { hands[p][i + 2] = board[i] }
+        }
 
-        for k in 0..<3 { h[k] = board[k]; o[k] = board[k] }
-        h[5] = hero[0]; h[6] = hero[1]
+        var wins = Array(repeating: 0, count: 6)
+        var ties = Array(repeating: 0, count: 6)
+        var shares = Array(repeating: 0.0, count: 6)
+        var scenarios = 0
+        var completedBoard = board
 
-        var win = 0, tie = 0, lose = 0
-
-        for i in 0..<(n - 1) {
-            for j in (i + 1)..<n {
-                o[5] = deck[i]; o[6] = deck[j]
-                for a in 0..<(n - 1) {
-                    if a == i || a == j { continue }
-                    for b in (a + 1)..<n {
-                        if b == i || b == j { continue }
-                        let t = deck[a], r = deck[b]
-                        h[3] = t; h[4] = r
-                        o[3] = t; o[4] = r
-                        let hs = ev.score(h), os = ev.score(o)
-
-                        // 特殊规则：玩家2最终最佳五张牌型低于一对4，玩家1直接获胜。
-                        if os < minimumOpponentScore {
-                            win += 1
-                        } else if hs > os {
-                            win += 1
-                        } else if hs == os {
-                            tie += 1
-                        } else {
-                            lose += 1
-                        }
-                    }
+        func evaluate() {
+            scenarios += 1
+            var best = Int.min
+            var winners: [Int] = []
+            for p in 0..<6 {
+                for i in 0..<5 { hands[p][i + 2] = completedBoard[i] }
+                let score = evaluator.score(hands[p])
+                if score > best {
+                    best = score
+                    winners = [p]
+                } else if score == best {
+                    winners.append(p)
+                }
+            }
+            if winners.count == 1 {
+                wins[winners[0]] += 1
+                shares[winners[0]] += 1
+            } else {
+                for p in winners {
+                    ties[p] += 1
+                    shares[p] += 1.0 / Double(winners.count)
                 }
             }
         }
-        return EquityResult(win: win, tie: tie, lose: lose)
+
+        func enumerate(start: Int, left: Int) {
+            if left == 0 {
+                evaluate()
+                return
+            }
+            if deck.count - start < left { return }
+            for i in start...(deck.count - left) {
+                completedBoard.append(deck[i])
+                enumerate(start: i + 1, left: left - 1)
+                completedBoard.removeLast()
+            }
+        }
+        enumerate(start: 0, left: missing)
+
+        return EquityResult(wins: wins, ties: ties, shares: shares, scenarios: scenarios)
     }
 }
 
 // MARK: - ViewModel
 
-enum Slot: Hashable, Identifiable {
-    case board(Int), hero(Int)
-    var id: Self { self }
+enum PickerTarget: Identifiable {
+    case hole(player: Int, index: Int)
+    case board(index: Int)
+    var id: String {
+        switch self {
+        case .hole(let p, let i): return "hole-\(p)-\(i)"
+        case .board(let i): return "board-\(i)"
+        }
+    }
 }
 
 @MainActor
 final class OddsViewModel: ObservableObject {
-    @Published var board: [Int?] = Array(repeating: nil, count: 3)
-    @Published var hero: [Int?] = Array(repeating: nil, count: 2)
+    @Published var holes: [[Int?]] = Array(repeating: [nil, nil], count: 6)
+    @Published var board: [Int?] = Array(repeating: nil, count: 4)
     @Published var result: EquityResult?
     @Published var isCalculating = false
+    @Published var status = "请先选完六位玩家的 12 张底牌"
     private var generation = 0
 
-    var usedCards: Set<Int> { Set((board + hero).compactMap { $0 }) }
+    var usedCards: Set<Int> { Set((holes.flatMap { $0 } + board).compactMap { $0 }) }
+    var allHolesSelected: Bool { holes.allSatisfy { $0.allSatisfy { $0 != nil } } }
 
-    func card(for slot: Slot) -> Int? {
-        switch slot {
+    func card(for target: PickerTarget) -> Int? {
+        switch target {
+        case .hole(let p, let i): return holes[p][i]
         case .board(let i): return board[i]
-        case .hero(let i): return hero[i]
         }
     }
 
-    func set(_ card: Int?, for slot: Slot) {
-        switch slot {
+    func set(_ card: Int?, for target: PickerTarget) {
+        switch target {
+        case .hole(let p, let i): holes[p][i] = card
         case .board(let i): board[i] = card
-        case .hero(let i): hero[i] = card
-        }
-        recalc()
-    }
-
-    func setCards(_ cards: [Int], forBoard: Bool) {
-        if forBoard {
-            board = Array(cards.prefix(3)).map { Optional($0) } + Array(repeating: nil, count: max(0, 3 - cards.count))
-        } else {
-            hero = Array(cards.prefix(2)).map { Optional($0) } + Array(repeating: nil, count: max(0, 2 - cards.count))
         }
         recalc()
     }
 
     func reset() {
-        board = Array(repeating: nil, count: 3)
-        hero = Array(repeating: nil, count: 2)
+        holes = Array(repeating: [nil, nil], count: 6)
+        board = Array(repeating: nil, count: 4)
         recalc()
     }
 
@@ -239,67 +253,122 @@ final class OddsViewModel: ObservableObject {
         generation += 1
         let gen = generation
         result = nil
-        isCalculating = false
-
-        let b = board.compactMap { $0 }
-        let h = hero.compactMap { $0 }
-        guard b.count == 3, h.count == 2 else { return }
-
+        guard allHolesSelected else {
+            isCalculating = false
+            status = "请先选完六位玩家的 12 张底牌"
+            return
+        }
+        let knownBoard = board.compactMap { $0 }
+        let knownHoles = holes.map { $0.compactMap { $0 } }
         isCalculating = true
+        status = "正在枚举剩余公共牌…"
         Task {
             let r = await Task.detached(priority: .userInitiated) {
-                EquityCalculator.compute(hero: h, board: b)
+                EquityCalculator.compute(holeCards: knownHoles, board: knownBoard)
             }.value
             guard gen == self.generation else { return }
             self.result = r
             self.isCalculating = false
+            self.status = "已知公共牌 \(knownBoard.count)/4 张 · 按剩余牌补齐至河牌"
         }
     }
 }
 
 // MARK: - 界面
 
-enum PickerTarget: String, Identifiable {
-    case board, hero
-    var id: String { rawValue }
-    var count: Int { self == .board ? 3 : 2 }
-}
-
 struct ContentView: View {
     @StateObject private var vm = OddsViewModel()
     @State private var picking: PickerTarget?
 
+    private let playerColumns = [GridItem(.flexible(), spacing: 6), GridItem(.flexible(), spacing: 6)]
+
     var body: some View {
         NavigationView {
             ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    section("公共牌（已知翻牌 3 张）") {
-                        HStack(spacing: 8) {
-                            ForEach(0..<3, id: \.self) { i in
-                                CardSlotView(card: vm.board[i]) { picking = .board }
-                            }
-                        }
-                    }
-                    section("玩家1 手牌（明牌 2 张）") {
-                        HStack(spacing: 8) {
-                            ForEach(0..<2, id: \.self) { i in
-                                CardSlotView(card: vm.hero[i]) { picking = .hero }
-                            }
-                        }
-                    }
-                    section("玩家2 手牌（暗牌，由程序枚举）") {
-                        HStack(spacing: 8) {
-                            ForEach(0..<2, id: \.self) { _ in CardBackView() }
-                        }
-                    }
-                    Text("规则：玩家2最终最佳牌型若低于一对4，直接判玩家1获胜；否则按标准德州扑克牌型比较。")
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("六人桌 · 标准德州扑克 · 自动补齐未知公共牌")
                         .font(.caption2)
                         .foregroundColor(.secondary)
-                    ResultView(result: vm.result, isCalculating: vm.isCalculating)
+
+                    LazyVGrid(columns: playerColumns, spacing: 6) {
+                        ForEach(0..<6, id: \.self) { p in
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("玩家 \(p + 1)").font(.caption.weight(.semibold))
+                                HStack(spacing: 5) {
+                                    ForEach(0..<2, id: \.self) { i in
+                                        CardSlotView(card: vm.holes[p][i]) {
+                                            picking = .hole(player: p, index: i)
+                                        }
+                                    }
+                                }
+                            }
+                            .padding(6)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color(.secondarySystemBackground))
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("公共牌（最多输入 4 张明牌）").font(.caption.weight(.semibold))
+                        HStack(spacing: 5) {
+                            ForEach(0..<4, id: \.self) { i in
+                                CardSlotView(card: vm.board[i]) {
+                                    picking = .board(index: i)
+                                }
+                            }
+                        }
+                        Text("每增加或更换一张公共牌，都会自动重新计算；未知牌会枚举至完整五张公共牌。")
+                            .font(.caption2).foregroundColor(.secondary)
+                    }
+
+                    HStack(spacing: 6) {
+                        if vm.isCalculating { ProgressView().scaleEffect(0.8) }
+                        Text(vm.status).font(.caption2).foregroundColor(.secondary)
+                        Spacer()
+                        Text("场景：\(vm.result?.scenarios ?? 0)")
+                            .font(.caption2.monospacedDigit()).foregroundColor(.secondary)
+                    }
+
+                    if let result = vm.result {
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text("六位玩家胜率").font(.subheadline.weight(.bold))
+                            ForEach(0..<6, id: \.self) { p in
+                                HStack(spacing: 6) {
+                                    Text("P\(p + 1)").font(.caption.weight(.bold)).frame(width: 24, alignment: .leading)
+                                    GeometryReader { geo in
+                                        ZStack(alignment: .leading) {
+                                            Capsule().fill(Color.gray.opacity(0.15))
+                                            Capsule().fill(Color.green)
+                                                .frame(width: geo.size.width * CGFloat(result.shares[p] / Double(max(1, result.scenarios))))
+                                        }
+                                    }
+                                    .frame(height: 8)
+                                    Text(String(format: "%.2f%%", result.shares[p] / Double(max(1, result.scenarios)) * 100))
+                                        .font(.caption.monospacedDigit().weight(.semibold))
+                                        .frame(width: 58, alignment: .trailing)
+                                }
+                                HStack(spacing: 12) {
+                                    Text("单独获胜 \(String(format: "%.2f%%", Double(result.wins[p]) / Double(max(1, result.scenarios)) * 100))%")
+                                    Text("平局 \(String(format: "%.2f%%", Double(result.ties[p]) / Double(max(1, result.scenarios)) * 100))%")
+                                }
+                                .font(.system(size: 9)).foregroundColor(.secondary)
+                            }
+                            Text("上方主百分比为权益：平局时由并列玩家均分。")
+                                .font(.caption2).foregroundColor(.secondary)
+                        }
+                        .padding(9)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color(.secondarySystemBackground))
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                    } else if !vm.isCalculating {
+                        Text("六位玩家的底牌全部选完后，即开始计算。")
+                            .font(.caption).foregroundColor(.secondary)
+                    }
                 }
-                .padding(12)
+                .padding(8)
             }
-            .navigationTitle("德州扑克胜率")
+            .navigationTitle("六人德州胜率")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
@@ -308,23 +377,21 @@ struct ContentView: View {
             }
             .sheet(item: $picking) { target in
                 CardPickerView(
-                    initial: (target == .board ? vm.board : vm.hero).compactMap { $0 },
-                    requiredCount: target.count,
+                    current: vm.card(for: target),
                     disabled: vm.usedCards,
-                    title: target == .board ? "选择公共牌" : "选择玩家1手牌"
-                ) { cards in
-                    vm.setCards(cards, forBoard: target == .board)
+                    title: pickerTitle(target)
+                ) { card in
+                    vm.set(card, for: target)
                     picking = nil
                 }
             }
         }
     }
 
-    @ViewBuilder
-    private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title).font(.subheadline)
-            content()
+    private func pickerTitle(_ target: PickerTarget) -> String {
+        switch target {
+        case .hole(let p, let i): return "玩家 \(p + 1) 底牌 \(i + 1)"
+        case .board(let i): return "公共牌 \(i + 1)"
         }
     }
 }
@@ -332,210 +399,80 @@ struct ContentView: View {
 struct CardSlotView: View {
     let card: Int?
     let action: () -> Void
-
     var body: some View {
         Button(action: action) {
             ZStack {
-                RoundedRectangle(cornerRadius: 10)
-                    .fill(card == nil ? Color(.secondarySystemBackground) : Color.white)
-                RoundedRectangle(cornerRadius: 10)
-                    .strokeBorder(card == nil ? Color.gray.opacity(0.5) : Color.gray.opacity(0.3),
-                                  style: StrokeStyle(lineWidth: 1.5, dash: card == nil ? [5] : []))
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(card == nil ? Color(.systemBackground) : Color.white)
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color.gray.opacity(0.35), lineWidth: 1)
                 if let c = card {
                     Text(Card.text(c))
-                        .font(.system(size: 22, weight: .bold, design: .rounded))
+                        .font(.system(size: 17, weight: .bold, design: .rounded))
                         .foregroundColor(Card.isRed(c) ? .red : .black)
                 } else {
-                    Image(systemName: "plus").foregroundColor(.secondary)
+                    Image(systemName: "plus").font(.caption).foregroundColor(.secondary)
                 }
             }
-            .frame(width: 52, height: 74)
+            .frame(width: 43, height: 58)
         }
         .buttonStyle(.plain)
     }
 }
 
-struct CardBackView: View {
-    var body: some View {
-        RoundedRectangle(cornerRadius: 10)
-            .fill(LinearGradient(colors: [.blue, .indigo], startPoint: .topLeading, endPoint: .bottomTrailing))
-            .overlay(Text("?").font(.title).bold().foregroundColor(.white.opacity(0.8)))
-            .frame(width: 70, height: 100)
-    }
-}
-
-struct ResultView: View {
-    let result: EquityResult?
-    let isCalculating: Bool
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if isCalculating {
-                HStack(spacing: 8) {
-                    Text("玩家1 胜率").font(.headline)
-                    Spacer()
-                    ProgressView()
-                    Text("正在计算…").font(.footnote).foregroundColor(.secondary)
-                }
-            } else if let r = result {
-                HStack(alignment: .firstTextBaseline) {
-                    Text("玩家1 胜率").font(.headline)
-                    Spacer()
-                    Text(String(format: "%.2f%%", r.winPct * 100))
-                        .font(.system(size: 34, weight: .bold, design: .rounded))
-                        .foregroundColor(.green)
-                        .monospacedDigit()
-                }
-
-                GeometryReader { geo in
-                    HStack(spacing: 0) {
-                        Rectangle().fill(Color.green).frame(width: geo.size.width * r.winPct)
-                        Rectangle().fill(Color.orange).frame(width: geo.size.width * r.tiePct)
-                        Rectangle().fill(Color.red).frame(width: geo.size.width * r.losePct)
-                    }
-                    .clipShape(Capsule())
-                }
-                .frame(height: 9)
-
-                HStack(spacing: 0) {
-                    compactMetric(.green, "获胜", r.winPct)
-                    Spacer(minLength: 6)
-                    compactMetric(.orange, "平局", r.tiePct)
-                    Spacer(minLength: 6)
-                    compactMetric(.red, "落败", r.losePct)
-                }
-
-                Divider()
-
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("权益（平局算一半）").font(.caption).foregroundColor(.secondary)
-                        Text(String(format: "%.2f%%", r.equity * 100))
-                            .font(.subheadline.weight(.semibold)).monospacedDigit()
-                    }
-                    Spacer()
-                    VStack(alignment: .trailing, spacing: 2) {
-                        Text("枚举情况").font(.caption).foregroundColor(.secondary)
-                        Text(r.total.formatted())
-                            .font(.subheadline.weight(.semibold)).monospacedDigit()
-                    }
-                }
-            } else {
-                Text("请选满 3 张公共牌和玩家1的 2 张手牌")
-                    .font(.footnote)
-                    .foregroundColor(.secondary)
-            }
-        }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.secondarySystemBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 14))
-    }
-
-    private func compactMetric(_ color: Color, _ title: String, _ value: Double) -> some View {
-        HStack(spacing: 4) {
-            Circle().fill(color).frame(width: 7, height: 7)
-            Text(title).font(.caption).foregroundColor(.secondary)
-            Text(String(format: "%.2f%%", value * 100))
-                .font(.caption.weight(.semibold))
-                .monospacedDigit()
-        }
-    }
-}
-
 struct CardPickerView: View {
-    let initial: [Int]
-    let requiredCount: Int
+    let current: Int?
     let disabled: Set<Int>
     let title: String
-    let onConfirm: ([Int]) -> Void
+    let onSelect: (Int?) -> Void
 
-    @State private var selected: [Int]
-    private let columns = Array(repeating: GridItem(.flexible(), spacing: 3), count: 7)
-
-    init(initial: [Int], requiredCount: Int, disabled: Set<Int>, title: String, onConfirm: @escaping ([Int]) -> Void) {
-        self.initial = initial
-        self.requiredCount = requiredCount
-        self.disabled = disabled.subtracting(initial)
-        self.title = title
-        self.onConfirm = onConfirm
-        _selected = State(initialValue: initial)
-    }
+    @Environment(\.presentationMode) private var presentationMode
+    private let columns = Array(repeating: GridItem(.flexible(), spacing: 2), count: 7)
 
     var body: some View {
         NavigationView {
-            VStack(spacing: 8) {
-                Text("已选 \(selected.count)/\(requiredCount) 张 · 点击牌面选择或取消")
-                    .font(.footnote)
-                    .foregroundColor(.secondary)
-                HStack(spacing: 6) {
-                    ForEach(0..<requiredCount, id: \.self) { i in
-                        ZStack {
-                            RoundedRectangle(cornerRadius: 5)
-                                .fill(i < selected.count ? Color(.secondarySystemBackground) : Color.clear)
-                            RoundedRectangle(cornerRadius: 5)
-                                .stroke(Color.gray.opacity(0.35), style: StrokeStyle(lineWidth: 1, dash: i < selected.count ? [] : [3]))
-                            if i < selected.count {
-                                Text(Card.text(selected[i]))
-                                    .font(.system(size: 17, weight: .bold))
-                                    .foregroundColor(Card.isRed(selected[i]) ? .red : .primary)
-                            } else {
-                                Image(systemName: "plus").foregroundColor(.secondary)
-                            }
-                        }
-                        .frame(height: 42)
+            ScrollView {
+                VStack(spacing: 7) {
+                    if let c = current {
+                        Button("清除此位置") { onSelect(nil) }
+                            .font(.caption)
+                            .padding(5)
                     }
-                }
-                ScrollView(.vertical, showsIndicators: true) {
-                    VStack(alignment: .leading, spacing: 7) {
-                        ForEach([3, 2, 1, 0], id: \.self) { suit in
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(Card.suitSymbols[suit])
-                                    .font(.system(size: 16, weight: .bold))
-                                    .foregroundColor(suit == 1 || suit == 2 ? .red : .primary)
-                                LazyVGrid(columns: columns, spacing: 3) {
-                                    ForEach((0..<13).reversed(), id: \.self) { rank in
-                                        let card = Card.make(rank: rank, suit: suit)
-                                        let isSelected = selected.contains(card)
-                                        let isDisabled = disabled.contains(card) && !isSelected
-                                        Button {
-                                            if isSelected {
-                                                selected.removeAll { $0 == card }
-                                            } else if selected.count < requiredCount && !isDisabled {
-                                                selected.append(card)
-                                            }
-                                        } label: {
-                                            Text(Card.rankSymbols[rank])
-                                                .font(.system(size: 13, weight: .semibold))
-                                                .frame(maxWidth: .infinity, minHeight: 32)
-                                                .background(isSelected ? Color.accentColor.opacity(0.35) : Color(.secondarySystemBackground))
-                                                .foregroundColor(Card.isRed(card) ? .red : .primary)
-                                                .clipShape(RoundedRectangle(cornerRadius: 5))
-                                                .overlay(RoundedRectangle(cornerRadius: 5).stroke(isSelected ? Color.accentColor : .clear, lineWidth: 1.5))
-                                        }
-                                        .disabled(isDisabled)
-                                        .opacity(isDisabled ? 0.22 : 1)
+                    ForEach([3, 2, 1, 0], id: \.self) { suit in
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(Card.suitSymbols[suit])
+                                .font(.caption.weight(.bold))
+                                .foregroundColor(suit == 1 || suit == 2 ? .red : .primary)
+                            LazyVGrid(columns: columns, spacing: 3) {
+                                ForEach((0..<13).reversed(), id: \.self) { rank in
+                                    let card = Card.make(rank: rank, suit: suit)
+                                    let unavailable = disabled.contains(card) && card != current
+                                    Button {
+                                        onSelect(card)
+                                    } label: {
+                                        Text(Card.rankSymbols[rank])
+                                            .font(.system(size: 13, weight: .semibold))
+                                            .frame(maxWidth: .infinity, minHeight: 35)
+                                            .background(card == current ? Color.accentColor.opacity(0.35) : Color(.secondarySystemBackground))
+                                            .foregroundColor(Card.isRed(card) ? .red : .primary)
+                                            .clipShape(RoundedRectangle(cornerRadius: 4))
                                     }
+                                    .disabled(unavailable)
+                                    .opacity(unavailable ? 0.2 : 1)
                                 }
                             }
                         }
                     }
-                    .padding(.horizontal, 8)
                 }
-                HStack {
-                    Button("清空选择") { selected.removeAll() }
-                        .disabled(selected.isEmpty)
-                    Spacer()
-                    Button("确认选择") { onConfirm(selected) }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(selected.count != requiredCount)
-                }
-                .padding(.horizontal, 8)
-                .padding(.bottom, 8)
+                .padding(7)
             }
-            .padding(.top, 8)
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("取消") { presentationMode.wrappedValue.dismiss() }
+                }
+            }
         }
     }
 }
