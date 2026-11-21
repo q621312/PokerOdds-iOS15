@@ -137,8 +137,12 @@ struct EquityResult {
 }
 
 enum EquityCalculator {
-    /// hero: 玩家1两张牌；board: 三张翻牌。
-    /// 枚举：玩家2任意两张手牌 × 转牌+河牌任意两张，共 C(47,2) × C(45,2) = 1,070,190 种。
+    /// 玩家2最佳牌型低于一对4时，按特殊规则直接判玩家1获胜。
+    /// 分数编码与 HandEvaluator 一致：类别1（对子），对子点数2（4）。
+    private static let minimumOpponentScore = (1 << 20) | (2 << 16)
+
+    /// hero: 玩家1两张明牌；board: 三张已知公共牌。
+    /// 枚举玩家2两张暗牌及转牌、河牌，共 C(47,2) × C(45,2) = 1,070,190 种。
     static func compute(hero: [Int], board: [Int]) -> EquityResult {
         let used = Set(hero + board)
         let deck = (0..<52).filter { !used.contains($0) }
@@ -165,7 +169,17 @@ enum EquityCalculator {
                         h[3] = t; h[4] = r
                         o[3] = t; o[4] = r
                         let hs = ev.score(h), os = ev.score(o)
-                        if hs > os { win += 1 } else if hs == os { tie += 1 } else { lose += 1 }
+
+                        // 特殊规则：玩家2最终最佳五张牌型低于一对4，玩家1直接获胜。
+                        if os < minimumOpponentScore {
+                            win += 1
+                        } else if hs > os {
+                            win += 1
+                        } else if hs == os {
+                            tie += 1
+                        } else {
+                            lose += 1
+                        }
                     }
                 }
             }
@@ -259,25 +273,28 @@ struct ContentView: View {
         NavigationView {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
-                    section("公共牌（翻牌）") {
+                    section("公共牌（已知翻牌 3 张）") {
                         HStack(spacing: 8) {
                             ForEach(0..<3, id: \.self) { i in
                                 CardSlotView(card: vm.board[i]) { picking = .board }
                             }
                         }
                     }
-                    section("玩家1 手牌（明牌）") {
+                    section("玩家1 手牌（明牌 2 张）") {
                         HStack(spacing: 8) {
                             ForEach(0..<2, id: \.self) { i in
                                 CardSlotView(card: vm.hero[i]) { picking = .hero }
                             }
                         }
                     }
-                    section("玩家2 手牌（暗牌，未知）") {
+                    section("玩家2 手牌（暗牌，由程序枚举）") {
                         HStack(spacing: 8) {
                             ForEach(0..<2, id: \.self) { _ in CardBackView() }
                         }
                     }
+                    Text("规则：玩家2最终最佳牌型若低于一对4，直接判玩家1获胜；否则按标准德州扑克牌型比较。")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
                     ResultView(result: vm.result, isCalculating: vm.isCalculating)
                 }
                 .padding(12)
