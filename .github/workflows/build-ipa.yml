@@ -1,0 +1,47 @@
+name: Build TrollStore IPA
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Build unsigned iOS archive
+        run: |
+          xcodebuild \
+            -project PokerOdds.xcodeproj \
+            -scheme PokerOdds \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$PWD/build/PokerOdds.xcarchive" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            archive
+
+      - name: Package unsigned IPA for TrollStore
+        run: |
+          mkdir -p "$PWD/build/ipa/Payload"
+          cp -R "$PWD/build/PokerOdds.xcarchive/Products/Applications/PokerOdds.app" "$PWD/build/ipa/Payload/"
+          cd "$PWD/build/ipa"
+          zip -r "$GITHUB_WORKSPACE/build/PokerOdds-unsigned.ipa" Payload
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PokerOdds-iOS15-unsigned-IPA
+          path: build/PokerOdds-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 14
