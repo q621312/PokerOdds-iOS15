@@ -206,6 +206,15 @@ final class OddsViewModel: ObservableObject {
         recalc()
     }
 
+    func setCards(_ cards: [Int], forBoard: Bool) {
+        if forBoard {
+            board = Array(cards.prefix(3)).map { Optional($0) } + Array(repeating: nil, count: max(0, 3 - cards.count))
+        } else {
+            hero = Array(cards.prefix(2)).map { Optional($0) } + Array(repeating: nil, count: max(0, 2 - cards.count))
+        }
+        recalc()
+    }
+
     func reset() {
         board = Array(repeating: nil, count: 3)
         hero = Array(repeating: nil, count: 2)
@@ -236,9 +245,15 @@ final class OddsViewModel: ObservableObject {
 
 // MARK: - 界面
 
+enum PickerTarget: String, Identifiable {
+    case board, hero
+    var id: String { rawValue }
+    var count: Int { self == .board ? 3 : 2 }
+}
+
 struct ContentView: View {
     @StateObject private var vm = OddsViewModel()
-    @State private var picking: Slot?
+    @State private var picking: PickerTarget?
 
     var body: some View {
         NavigationView {
@@ -247,14 +262,14 @@ struct ContentView: View {
                     section("公共牌（翻牌）") {
                         HStack(spacing: 12) {
                             ForEach(0..<3, id: \.self) { i in
-                                CardSlotView(card: vm.board[i]) { picking = .board(i) }
+                                CardSlotView(card: vm.board[i]) { picking = .board }
                             }
                         }
                     }
                     section("玩家1 手牌（明牌）") {
                         HStack(spacing: 12) {
                             ForEach(0..<2, id: \.self) { i in
-                                CardSlotView(card: vm.hero[i]) { picking = .hero(i) }
+                                CardSlotView(card: vm.hero[i]) { picking = .hero }
                             }
                         }
                     }
@@ -274,15 +289,16 @@ struct ContentView: View {
                     Button("重置") { vm.reset() }
                 }
             }
-            .sheet(item: $picking) { slot in
+            .sheet(item: $picking) { target in
                 CardPickerView(
-                    current: vm.card(for: slot),
-                    disabled: vm.usedCards.subtracting(vm.card(for: slot).map { [$0] } ?? [])
-                ) { card in
-                    vm.set(card, for: slot)
+                    initial: (target == .board ? vm.board : vm.hero).compactMap { $0 },
+                    requiredCount: target.count,
+                    disabled: vm.usedCards,
+                    title: target == .board ? "选择公共牌" : "选择玩家1手牌"
+                ) { cards in
+                    vm.setCards(cards, forBoard: target == .board)
                     picking = nil
                 }
-
             }
         }
     }
@@ -391,53 +407,97 @@ struct ResultView: View {
 }
 
 struct CardPickerView: View {
-    let current: Int?
+    let initial: [Int]
+    let requiredCount: Int
     let disabled: Set<Int>
-    let onSelect: (Int?) -> Void
+    let title: String
+    let onConfirm: ([Int]) -> Void
 
-    private let columns = Array(repeating: GridItem(.flexible(), spacing: 8), count: 7)
+    @State private var selected: [Int]
+    private let columns = Array(repeating: GridItem(.flexible(), spacing: 3), count: 7)
+
+    init(initial: [Int], requiredCount: Int, disabled: Set<Int>, title: String, onConfirm: @escaping ([Int]) -> Void) {
+        self.initial = initial
+        self.requiredCount = requiredCount
+        self.disabled = disabled.subtracting(initial)
+        self.title = title
+        self.onConfirm = onConfirm
+        _selected = State(initialValue: initial)
+    }
 
     var body: some View {
         NavigationView {
-            ScrollView(.vertical, showsIndicators: true) {
-                VStack(alignment: .leading, spacing: 18) {
-                    if current != nil {
-                        HStack {
-                            Spacer()
-                            Button("清除", role: .destructive) { onSelect(nil) }
+            VStack(spacing: 8) {
+                Text("已选 \(selected.count)/\(requiredCount) 张 · 点击牌面选择或取消")
+                    .font(.footnote)
+                    .foregroundColor(.secondary)
+                HStack(spacing: 6) {
+                    ForEach(0..<requiredCount, id: \.self) { i in
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 5)
+                                .fill(i < selected.count ? Color(.secondarySystemBackground) : Color.clear)
+                            RoundedRectangle(cornerRadius: 5)
+                                .stroke(Color.gray.opacity(0.35), style: StrokeStyle(lineWidth: 1, dash: i < selected.count ? [] : [3]))
+                            if i < selected.count {
+                                Text(Card.text(selected[i]))
+                                    .font(.system(size: 17, weight: .bold))
+                                    .foregroundColor(Card.isRed(selected[i]) ? .red : .primary)
+                            } else {
+                                Image(systemName: "plus").foregroundColor(.secondary)
+                            }
                         }
+                        .frame(height: 42)
                     }
-                    ForEach([3, 2, 1, 0], id: \.self) { suit in
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(Card.suitSymbols[suit])
-                                .font(.title2)
-                                .foregroundColor(suit == 1 || suit == 2 ? .red : .primary)
-                            LazyVGrid(columns: columns, spacing: 8) {
-                                ForEach((0..<13).reversed(), id: \.self) { rank in
-                                    let c = Card.make(rank: rank, suit: suit)
-                                    let isDisabled = disabled.contains(c)
-                                    Button { onSelect(c) } label: {
-                                        Text(Card.rankSymbols[rank])
-                                            .font(.system(size: 18, weight: .semibold, design: .rounded))
-                                            .frame(maxWidth: .infinity, minHeight: 44)
-                                            .background(c == current ? Color.accentColor.opacity(0.25) : Color(.secondarySystemBackground))
-                                            .foregroundColor(Card.isRed(c) ? .red : .primary)
-                                            .clipShape(RoundedRectangle(cornerRadius: 8))
-                                            .overlay(
-                                                RoundedRectangle(cornerRadius: 8)
-                                                    .stroke(c == current ? Color.accentColor : .clear, lineWidth: 2)
-                                            )
+                }
+                ScrollView(.vertical, showsIndicators: true) {
+                    VStack(alignment: .leading, spacing: 7) {
+                        ForEach([3, 2, 1, 0], id: \.self) { suit in
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(Card.suitSymbols[suit])
+                                    .font(.system(size: 16, weight: .bold))
+                                    .foregroundColor(suit == 1 || suit == 2 ? .red : .primary)
+                                LazyVGrid(columns: columns, spacing: 3) {
+                                    ForEach((0..<13).reversed(), id: \.self) { rank in
+                                        let card = Card.make(rank: rank, suit: suit)
+                                        let isSelected = selected.contains(card)
+                                        let isDisabled = disabled.contains(card) && !isSelected
+                                        Button {
+                                            if isSelected {
+                                                selected.removeAll { $0 == card }
+                                            } else if selected.count < requiredCount && !isDisabled {
+                                                selected.append(card)
+                                            }
+                                        } label: {
+                                            Text(Card.rankSymbols[rank])
+                                                .font(.system(size: 13, weight: .semibold))
+                                                .frame(maxWidth: .infinity, minHeight: 32)
+                                                .background(isSelected ? Color.accentColor.opacity(0.35) : Color(.secondarySystemBackground))
+                                                .foregroundColor(Card.isRed(card) ? .red : .primary)
+                                                .clipShape(RoundedRectangle(cornerRadius: 5))
+                                                .overlay(RoundedRectangle(cornerRadius: 5).stroke(isSelected ? Color.accentColor : .clear, lineWidth: 1.5))
+                                        }
+                                        .disabled(isDisabled)
+                                        .opacity(isDisabled ? 0.22 : 1)
                                     }
-                                    .disabled(isDisabled)
-                                    .opacity(isDisabled ? 0.25 : 1)
                                 }
                             }
                         }
                     }
+                    .padding(.horizontal, 8)
                 }
-                .padding()
+                HStack {
+                    Button("清空选择") { selected.removeAll() }
+                        .disabled(selected.isEmpty)
+                    Spacer()
+                    Button("确认选择") { onConfirm(selected) }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(selected.count != requiredCount)
+                }
+                .padding(.horizontal, 8)
+                .padding(.bottom, 8)
             }
-            .navigationTitle("选择一张牌")
+            .padding(.top, 8)
+            .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
         }
     }
