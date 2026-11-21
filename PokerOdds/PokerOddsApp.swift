@@ -233,9 +233,9 @@ final class OddsViewModel: ObservableObject {
     func set(_ cards: [Int], for target: PickerTarget) {
         switch target {
         case .playerOne:
-            playerOne = (Array(cards.prefix(2)) + Array(repeating: nil, count: 2)).prefix(2).map { $0 }
+            playerOne = (0..<2).map { $0 < cards.count ? Optional(cards[$0]) : nil }
         case .board:
-            board = (Array(cards.prefix(3)) + Array(repeating: nil, count: 3)).prefix(3).map { $0 }
+            board = (0..<3).map { $0 < cards.count ? Optional(cards[$0]) : nil }
         }
         recalc()
     }
