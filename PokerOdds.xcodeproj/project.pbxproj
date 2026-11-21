@@ -5,7 +5,7 @@
 	objectVersion = 56;
 	objects = {
 		A10000000000000000000001 /* PokerOddsApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000002 /* PokerOddsApp.swift */; };
-		A10000000000000000000002 /* PokerOddsApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PokerOddsApp.swift; sourceTree = "<group>"; };
+		A10000000000000000000002 /* PokerOddsApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PokerOddsApp.swift; sourceTree = SOURCE_ROOT; };
 		A10000000000000000000003 /* PokerOdds.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PokerOdds.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A10000000000000000000004 = {isa = PBXGroup; children = (A10000000000000000000005 /* PokerOdds */, A10000000000000000000006 /* Products */,); sourceTree = "<group>"; };
 		A10000000000000000000005 /* PokerOdds */ = {isa = PBXGroup; children = (A10000000000000000000002 /* PokerOddsApp.swift */,); path = PokerOdds; sourceTree = "<group>"; };
