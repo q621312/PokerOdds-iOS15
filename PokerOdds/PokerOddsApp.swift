@@ -215,33 +215,29 @@ final class OddsViewModel: ObservableObject {
     var usedCards: Set<Int> { Set((playerOne + board).compactMap { $0 }) }
     var ready: Bool { playerOne.allSatisfy { $0 != nil } && board.allSatisfy { $0 != nil } }
 
-    func card(for target: PickerTarget) -> Int? {
+    // 点击任一槽位后，选牌器管理该区域的全部牌，而不是只编辑单个槽位。
+    func cards(for target: PickerTarget) -> [Int] {
         switch target {
-        case .playerOne(let i): return playerOne[i]
-        case .board(let i): return board[i]
+        case .playerOne: return playerOne.compactMap { $0 }
+        case .board: return board.compactMap { $0 }
         }
     }
 
-    func set(_ card: Int?, for target: PickerTarget) {
+    func selectionLimit(for target: PickerTarget) -> Int {
         switch target {
-        case .playerOne(let i): playerOne[i] = card
-        case .board(let i): board[i] = card
+        case .playerOne: return 2
+        case .board: return 3
+        }
+    }
+
+    func set(_ cards: [Int], for target: PickerTarget) {
+        switch target {
+        case .playerOne:
+            playerOne = (Array(cards.prefix(2)) + Array(repeating: nil, count: 2)).prefix(2).map { $0 }
+        case .board:
+            board = (Array(cards.prefix(3)) + Array(repeating: nil, count: 3)).prefix(3).map { $0 }
         }
         recalc()
-    }
-
-    // 当前选牌槽之外的所有必填槽位都已完成时，选中最后一张牌即可自动确认。
-    func isComplete(except target: PickerTarget) -> Bool {
-        switch target {
-        case .playerOne(let index):
-            return playerOne.enumerated().allSatisfy { i, card in
-                i == index || card != nil
-            } && board.allSatisfy { $0 != nil }
-        case .board(let index):
-            return board.enumerated().allSatisfy { i, card in
-                i == index || card != nil
-            } && playerOne.allSatisfy { $0 != nil }
-        }
     }
 
     func reset() {
@@ -358,12 +354,12 @@ struct ContentView: View {
             }
             .sheet(item: $picking) { target in
                 CardPickerView(
-                    current: vm.card(for: target),
-                    disabled: vm.usedCards,
-                    title: pickerTitle(target),
-                    autoConfirmWhenComplete: vm.isComplete(except: target)
-                ) { card in
-                    vm.set(card, for: target)
+                    selectedCards: vm.cards(for: target),
+                    disabled: vm.usedCards.subtracting(vm.cards(for: target)),
+                    selectionLimit: vm.selectionLimit(for: target),
+                    title: pickerTitle(target)
+                ) { cards in
+                    vm.set(cards, for: target)
                     picking = nil
                 }
             }
@@ -402,47 +398,56 @@ struct CardSlotView: View {
     }
 }
 
-// MARK: - 紧凑选牌界面：先暂存选择，确认后提交；完成最后一张时自动提交
+// MARK: - 多张选牌：玩家明牌选满2张、公共牌选满3张时自动提交；不足时手动确认
 struct CardPickerView: View {
-    let current: Int?
+    let selectedCards: [Int]
     let disabled: Set<Int>
+    let selectionLimit: Int
     let title: String
-    let autoConfirmWhenComplete: Bool
-    let onSelect: (Int?) -> Void
+    let onSelect: ([Int]) -> Void
 
     @Environment(\.presentationMode) private var presentationMode
-    @State private var draftCard: Int?
+    @State private var draftCards: [Int]
     private let suitsInOrder = [3, 0, 2, 1] // 黑桃、梅花、红桃、方块
 
-    init(current: Int?, disabled: Set<Int>, title: String,
-         autoConfirmWhenComplete: Bool, onSelect: @escaping (Int?) -> Void) {
-        self.current = current
+    init(selectedCards: [Int], disabled: Set<Int>, selectionLimit: Int,
+         title: String, onSelect: @escaping ([Int]) -> Void) {
+        self.selectedCards = selectedCards
         self.disabled = disabled
+        self.selectionLimit = selectionLimit
         self.title = title
-        self.autoConfirmWhenComplete = autoConfirmWhenComplete
         self.onSelect = onSelect
-        _draftCard = State(initialValue: current)
+        _draftCards = State(initialValue: selectedCards)
+    }
+
+    private var isFull: Bool { draftCards.count == selectionLimit }
+
+    private func toggle(_ card: Int) {
+        if let index = draftCards.firstIndex(of: card) {
+            draftCards.remove(at: index)
+        } else if draftCards.count < selectionLimit {
+            draftCards.append(card)
+            if draftCards.count == selectionLimit {
+                onSelect(draftCards)
+            }
+        }
     }
 
     var body: some View {
         NavigationView {
             VStack(spacing: 7) {
-                HStack(spacing: 8) {
-                    Text("当前选择：")
+                HStack(spacing: 6) {
+                    Text("已选 \(draftCards.count)/\(selectionLimit) 张：")
                         .font(.caption)
                         .foregroundColor(.secondary)
-                    if let card = draftCard {
+                    ForEach(draftCards, id: \.self) { card in
                         Text(Card.text(card))
-                            .font(.system(size: 16, weight: .bold))
+                            .font(.system(size: 14, weight: .bold))
                             .foregroundColor(Card.isRed(card) ? .red : .primary)
-                    } else {
-                        Text("未选择")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
                     }
                     Spacer()
-                    if draftCard != nil {
-                        Button("清除") { draftCard = nil }
+                    if !draftCards.isEmpty {
+                        Button("清空") { draftCards.removeAll() }
                             .font(.caption)
                     }
                 }
@@ -452,24 +457,21 @@ struct CardPickerView: View {
                     HStack(spacing: 2) {
                         ForEach((0..<13).reversed(), id: \.self) { rank in
                             let card = Card.make(rank: rank, suit: suit)
-                            let unavailable = disabled.contains(card) && card != current
+                            let unavailable = disabled.contains(card)
+                            let selected = draftCards.contains(card)
                             Button {
-                                if autoConfirmWhenComplete {
-                                    onSelect(card)
-                                } else {
-                                    draftCard = card
-                                }
+                                toggle(card)
                             } label: {
                                 Text(Card.rankSymbols[rank] + Card.suitSymbols[suit])
                                     .font(.system(size: 10, weight: .bold, design: .rounded))
                                     .minimumScaleFactor(0.65)
                                     .lineLimit(1)
                                     .frame(maxWidth: .infinity, minHeight: 36)
-                                    .background(card == draftCard ? Color.accentColor.opacity(0.35) : Color(.secondarySystemBackground))
+                                    .background(selected ? Color.accentColor.opacity(0.35) : Color(.secondarySystemBackground))
                                     .foregroundColor(Card.isRed(card) ? .red : .primary)
                                     .clipShape(RoundedRectangle(cornerRadius: 4))
                             }
-                            .disabled(unavailable)
+                            .disabled(unavailable || (!selected && draftCards.count >= selectionLimit))
                             .opacity(unavailable ? 0.2 : 1)
                         }
                     }
@@ -477,23 +479,16 @@ struct CardPickerView: View {
 
                 Spacer(minLength: 0)
 
-                if !autoConfirmWhenComplete {
-                    Button {
-                        onSelect(draftCard)
-                    } label: {
-                        Text("确认选择")
-                            .font(.subheadline.weight(.semibold))
-                            .frame(maxWidth: .infinity, minHeight: 40)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(draftCard == nil && current == nil)
-                    .padding(.bottom, 5)
-                } else {
-                    Text("已选中最后一张必需牌，将自动确认")
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                        .padding(.bottom, 5)
+                Button {
+                    onSelect(draftCards)
+                } label: {
+                    Text("确认选择（\(draftCards.count)张）")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity, minHeight: 40)
                 }
+                .buttonStyle(.borderedProminent)
+                .disabled(draftCards.isEmpty || isFull)
+                .padding(.bottom, 5)
             }
             .padding(.horizontal, 5)
             .padding(.top, 8)
