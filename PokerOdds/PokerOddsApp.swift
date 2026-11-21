@@ -258,29 +258,29 @@ struct ContentView: View {
     var body: some View {
         NavigationView {
             ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
+                VStack(alignment: .leading, spacing: 12) {
                     section("公共牌（翻牌）") {
-                        HStack(spacing: 12) {
+                        HStack(spacing: 8) {
                             ForEach(0..<3, id: \.self) { i in
                                 CardSlotView(card: vm.board[i]) { picking = .board }
                             }
                         }
                     }
                     section("玩家1 手牌（明牌）") {
-                        HStack(spacing: 12) {
+                        HStack(spacing: 8) {
                             ForEach(0..<2, id: \.self) { i in
                                 CardSlotView(card: vm.hero[i]) { picking = .hero }
                             }
                         }
                     }
                     section("玩家2 手牌（暗牌，未知）") {
-                        HStack(spacing: 12) {
+                        HStack(spacing: 8) {
                             ForEach(0..<2, id: \.self) { _ in CardBackView() }
                         }
                     }
                     ResultView(result: vm.result, isCalculating: vm.isCalculating)
                 }
-                .padding()
+                .padding(12)
             }
             .navigationTitle("德州扑克胜率")
             .navigationBarTitleDisplayMode(.inline)
@@ -305,8 +305,8 @@ struct ContentView: View {
 
     @ViewBuilder
     private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(title).font(.headline)
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title).font(.subheadline)
             content()
         }
     }
@@ -326,13 +326,13 @@ struct CardSlotView: View {
                                   style: StrokeStyle(lineWidth: 1.5, dash: card == nil ? [5] : []))
                 if let c = card {
                     Text(Card.text(c))
-                        .font(.system(size: 26, weight: .bold, design: .rounded))
+                        .font(.system(size: 22, weight: .bold, design: .rounded))
                         .foregroundColor(Card.isRed(c) ? .red : .black)
                 } else {
                     Image(systemName: "plus").foregroundColor(.secondary)
                 }
             }
-            .frame(width: 70, height: 100)
+            .frame(width: 52, height: 74)
         }
         .buttonStyle(.plain)
     }
@@ -352,17 +352,23 @@ struct ResultView: View {
     let isCalculating: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("玩家1 胜率").font(.headline)
+        VStack(alignment: .leading, spacing: 8) {
             if isCalculating {
                 HStack(spacing: 8) {
+                    Text("玩家1 胜率").font(.headline)
+                    Spacer()
                     ProgressView()
-                    Text("正在枚举约 107 万种情况…").foregroundColor(.secondary)
+                    Text("正在计算…").font(.footnote).foregroundColor(.secondary)
                 }
             } else if let r = result {
-                Text(String(format: "%.2f%%", r.winPct * 100))
-                    .font(.system(size: 44, weight: .bold, design: .rounded))
-                    .foregroundColor(.green)
+                HStack(alignment: .firstTextBaseline) {
+                    Text("玩家1 胜率").font(.headline)
+                    Spacer()
+                    Text(String(format: "%.2f%%", r.winPct * 100))
+                        .font(.system(size: 34, weight: .bold, design: .rounded))
+                        .foregroundColor(.green)
+                        .monospacedDigit()
+                }
 
                 GeometryReader { geo in
                     HStack(spacing: 0) {
@@ -372,36 +378,50 @@ struct ResultView: View {
                     }
                     .clipShape(Capsule())
                 }
-                .frame(height: 14)
+                .frame(height: 9)
 
-                VStack(alignment: .leading, spacing: 6) {
-                    row(.green, "获胜", r.winPct)
-                    row(.orange, "平局", r.tiePct)
-                    row(.red, "落败", r.losePct)
-                    Divider()
-                    HStack {
-                        Text("权益（平局算一半）").foregroundColor(.secondary)
-                        Spacer()
-                        Text(String(format: "%.2f%%", r.equity * 100)).monospacedDigit()
+                HStack(spacing: 0) {
+                    compactMetric(.green, "获胜", r.winPct)
+                    Spacer(minLength: 6)
+                    compactMetric(.orange, "平局", r.tiePct)
+                    Spacer(minLength: 6)
+                    compactMetric(.red, "落败", r.losePct)
+                }
+
+                Divider()
+
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("权益（平局算一半）").font(.caption).foregroundColor(.secondary)
+                        Text(String(format: "%.2f%%", r.equity * 100))
+                            .font(.subheadline.weight(.semibold)).monospacedDigit()
                     }
-                    Text("共枚举 \(r.total) 种情况").font(.footnote).foregroundColor(.secondary)
+                    Spacer()
+                    VStack(alignment: .trailing, spacing: 2) {
+                        Text("枚举情况").font(.caption).foregroundColor(.secondary)
+                        Text(r.total.formatted())
+                            .font(.subheadline.weight(.semibold)).monospacedDigit()
+                    }
                 }
             } else {
-                Text("请选满 3 张公共牌和玩家1的 2 张手牌").foregroundColor(.secondary)
+                Text("请选满 3 张公共牌和玩家1的 2 张手牌")
+                    .font(.footnote)
+                    .foregroundColor(.secondary)
             }
         }
-        .padding()
+        .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(.secondarySystemBackground))
         .clipShape(RoundedRectangle(cornerRadius: 14))
     }
 
-    private func row(_ color: Color, _ title: String, _ value: Double) -> some View {
-        HStack {
-            Circle().fill(color).frame(width: 10, height: 10)
-            Text(title)
-            Spacer()
-            Text(String(format: "%.2f%%", value * 100)).monospacedDigit()
+    private func compactMetric(_ color: Color, _ title: String, _ value: Double) -> some View {
+        HStack(spacing: 4) {
+            Circle().fill(color).frame(width: 7, height: 7)
+            Text(title).font(.caption).foregroundColor(.secondary)
+            Text(String(format: "%.2f%%", value * 100))
+                .font(.caption.weight(.semibold))
+                .monospacedDigit()
         }
     }
 }
