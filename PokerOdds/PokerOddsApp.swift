@@ -401,6 +401,12 @@ struct CardPickerView: View {
         NavigationView {
             ScrollView(.vertical, showsIndicators: true) {
                 VStack(alignment: .leading, spacing: 18) {
+                    if current != nil {
+                        HStack {
+                            Spacer()
+                            Button("清除", role: .destructive) { onSelect(nil) }
+                        }
+                    }
                     ForEach([3, 2, 1, 0], id: \.self) { suit in
                         VStack(alignment: .leading, spacing: 8) {
                             Text(Card.suitSymbols[suit])
@@ -433,13 +439,6 @@ struct CardPickerView: View {
             }
             .navigationTitle("选择一张牌")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar(content: {
-                if current != nil {
-                    ToolbarItem(placement: .navigationBarTrailing) {
-                        Button("清除", role: .destructive) { onSelect(nil) }
-                    }
-                }
-            } as ToolbarContent)
         }
     }
 }
