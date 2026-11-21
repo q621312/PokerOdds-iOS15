@@ -399,7 +399,7 @@ struct CardPickerView: View {
 
     var body: some View {
         NavigationView {
-            ScrollView {
+            ScrollView(.vertical, showsIndicators: true) {
                 VStack(alignment: .leading, spacing: 18) {
                     ForEach([3, 2, 1, 0], id: \.self) { suit in
                         VStack(alignment: .leading, spacing: 8) {
